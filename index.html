@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mouse Event Simulator</title>
+  <style>
+    body {
+      background-color: #f0f4f8;
+      font-family: Arial, sans-serif;
+      padding: 24px;
+      margin: 0;
+      color: #222;
+    }
+    h1 { color: #1a4f8b; margin: 0 0 4px; }
+    .sub { color: #555; margin: 0 0 20px; }
+
+    .layout { display: flex; gap: 20px; flex-wrap: wrap; }
+    .left  { flex: 1 1 420px; }
+    .right { flex: 1 1 420px; }
+
+    /* The area that listens for mouse events */
+    #target {
+      position: relative;
+      height: 300px;
+      background: #1a4f8b;
+      border-radius: 10px;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      cursor: crosshair;
+      overflow: hidden;
+    }
+    #inner {
+      width: 150px;
+      height: 100px;
+      background: #f39c12;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #222;
+      font-weight: bold;
+      text-align: center;
+      font-size: 14px;
+    }
+    #coords {
+      position: absolute;
+      left: 10px;
+      bottom: 8px;
+      font-family: monospace;
+      font-size: 13px;
+      opacity: 0.85;
+    }
+    .dot {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      margin: -6px 0 0 -6px;
+      border-radius: 50%;
+      pointer-events: none;   /* dots must not catch mouse events themselves */
+      animation: fade 1s forwards;
+    }
+    @keyframes fade { to { opacity: 0; transform: scale(2.5); } }
+
+    .options { margin: 14px 0; font-size: 14px; }
+    .options label { margin-right: 16px; }
+    .options button {
+      padding: 4px 12px;
+      border: 1px solid #1a4f8b;
+      background: #ffffff;
+      color: #1a4f8b;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    /* One card per event type */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+      gap: 8px;
+    }
+    .card {
+      background: #ffffff;
+      border-radius: 8px;
+      padding: 10px 12px;
+      border-left: 5px solid #c3ccd6;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      transition: background-color 0.4s, border-color 0.4s;
+    }
+    .card.flash { background: #fff3c4; border-color: #f39c12; transition: none; }
+    .card .name { font-family: monospace; font-weight: bold; font-size: 15px; }
+    .card .count { float: right; font-weight: bold; color: #1a4f8b; }
+    .card .desc { font-size: 12px; color: #666; margin-top: 4px; }
+
+    /* Last event details */
+    .panel {
+      background: #ffffff;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-top: 14px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    .panel h2 { font-size: 16px; margin: 0 0 8px; color: #1a4f8b; }
+    .details { display: grid; grid-template-columns: 120px 1fr; font-size: 13px; row-gap: 3px; }
+    .details div:nth-child(odd) { color: #666; font-family: monospace; }
+
+    /* Event log */
+    #log {
+      font-family: monospace;
+      font-size: 12px;
+      height: 220px;
+      overflow-y: auto;
+      background: #0b1426;
+      color: #d6e2f5;
+      border-radius: 8px;
+      padding: 8px 10px;
+      margin-top: 14px;
+    }
+    #log .type { color: #f5c26b; }
+  </style>
+</head>
+<body>
+  <h1>Mouse Event Simulator</h1>
+  <p class="sub">Move, click, right-click, double-click and scroll over the blue box. Every mouse event it receives lights up on the right.</p>
+
+  <div class="layout">
+    <div class="left">
+      <div id="target">
+        <div id="inner">Inner box<br><small>(a child element)</small></div>
+        <div id="coords">x: -, y: -</div>
+      </div>
+
+      <div class="options">
+        <label><input type="checkbox" id="logMove"> Log mousemove (very noisy)</label>
+        <label><input type="checkbox" id="blockMenu" checked> Block right-click menu</label>
+        <label><input type="checkbox" id="blockScroll" checked> Block page scroll on wheel</label>
+        <button id="clearButton">Clear</button>
+      </div>
+
+      <div class="panel">
+        <h2>Last event</h2>
+        <div class="details" id="details">
+          <div>type</div><div>-</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="right">
+      <div class="grid" id="grid"></div>
+      <div id="log"></div>
+    </div>
+  </div>
+
+  <script>
+    // Every mouse event type, with a short explanation of when it fires
+    var EVENTS = [
+      ["mousedown",   "Any mouse button is pressed down"],
+      ["mouseup",     "Any mouse button is released"],
+      ["click",       "Left button pressed and released on the same spot"],
+      ["dblclick",    "Two left clicks in quick succession"],
+      ["auxclick",    "Click with a non-left button (middle, right, back, forward)"],
+      ["contextmenu", "Right-click, just before the menu would open"],
+      ["mousemove",   "The pointer moves inside the box"],
+      ["mouseenter",  "Pointer enters the blue box. Ignores the inner box. Does not bubble."],
+      ["mouseleave",  "Pointer leaves the blue box. Ignores the inner box. Does not bubble."],
+      ["mouseover",   "Pointer enters the box OR moves onto the inner box. Bubbles."],
+      ["mouseout",    "Pointer leaves the box OR moves off the inner box. Bubbles."],
+      ["wheel",       "Scroll wheel or trackpad scroll over the box"]
+    ];
+
+    var BUTTON_NAMES = ["Left", "Middle", "Right", "Back", "Forward"];
+
+    var target = document.getElementById("target");
+    var grid = document.getElementById("grid");
+    var log = document.getElementById("log");
+    var counts = {};
+    var cards = {};
+
+    // Build one card per event type
+    EVENTS.forEach(function (ev) {
+      var name = ev[0];
+      counts[name] = 0;
+
+      var card = document.createElement("div");
+      card.className = "card";
+      card.innerHTML =
+        "<span class='count'>0</span>" +
+        "<div class='name'>" + name + "</div>" +
+        "<div class='desc'>" + ev[1] + "</div>";
+      grid.appendChild(card);
+      cards[name] = card;
+
+      // Register the listener. { passive: false } lets the wheel handler call
+      // preventDefault() to stop the page from scrolling.
+      target.addEventListener(name, handleEvent, { passive: false });
+    });
+
+    function handleEvent(e) {
+      // Optional: stop the browser's default behavior
+      if (e.type === "contextmenu" && document.getElementById("blockMenu").checked) {
+        e.preventDefault();
+      }
+      if (e.type === "wheel" && document.getElementById("blockScroll").checked) {
+        e.preventDefault();
+      }
+
+      // Count it and flash its card
+      counts[e.type]++;
+      var card = cards[e.type];
+      card.querySelector(".count").textContent = counts[e.type];
+      card.classList.add("flash");
+      clearTimeout(card.flashTimer);
+      card.flashTimer = setTimeout(function () { card.classList.remove("flash"); }, 120);
+
+      // Position relative to the blue box
+      var box = target.getBoundingClientRect();
+      var x = Math.round(e.clientX - box.left);
+      var y = Math.round(e.clientY - box.top);
+      document.getElementById("coords").textContent = "x: " + x + ", y: " + y;
+
+      // Show a colored dot for button events
+      if (e.type === "mousedown") addDot(x, y, "#e74c3c");
+      if (e.type === "click")     addDot(x, y, "#2ecc71");
+      if (e.type === "dblclick")  addDot(x, y, "#9b59b6");
+
+      showDetails(e, x, y);
+
+      if (e.type !== "mousemove" || document.getElementById("logMove").checked) {
+        addLogLine(e, x, y);
+      }
+    }
+
+    function addDot(x, y, color) {
+      var dot = document.createElement("div");
+      dot.className = "dot";
+      dot.style.left = x + "px";
+      dot.style.top = y + "px";
+      dot.style.background = color;
+      target.appendChild(dot);
+      setTimeout(function () { dot.remove(); }, 1000);
+    }
+
+    // Which mouse buttons are held right now. e.buttons is a bitmask:
+    // 1 = left, 2 = right, 4 = middle, 8 = back, 16 = forward
+    function heldButtons(bits) {
+      var names = [];
+      if (bits & 1)  names.push("Left");
+      if (bits & 2)  names.push("Right");
+      if (bits & 4)  names.push("Middle");
+      if (bits & 8)  names.push("Back");
+      if (bits & 16) names.push("Forward");
+      return names.length ? names.join(" + ") + " (" + bits + ")" : "none (0)";
+    }
+
+    function modifierKeys(e) {
+      var keys = [];
+      if (e.shiftKey) keys.push("Shift");
+      if (e.ctrlKey)  keys.push("Ctrl");
+      if (e.altKey)   keys.push("Alt");
+      if (e.metaKey)  keys.push("Meta/Cmd");
+      return keys.length ? keys.join(" + ") : "none";
+    }
+
+    function showDetails(e, x, y) {
+      var rows = [
+        ["type", e.type],
+        ["target", e.target.id || "(dot)"],
+        ["x, y in box", x + ", " + y],
+        ["clientX, clientY", e.clientX + ", " + e.clientY],
+        ["screenX, screenY", e.screenX + ", " + e.screenY],
+        ["button", e.button + " (" + (BUTTON_NAMES[e.button] || "?") + ")"],
+        ["buttons", heldButtons(e.buttons)],
+        ["detail", e.detail + (e.type === "click" || e.type === "mousedown" ? " (click count)" : "")],
+        ["modifier keys", modifierKeys(e)]
+      ];
+      if (e.type === "mouseover" || e.type === "mouseout" ||
+          e.type === "mouseenter" || e.type === "mouseleave") {
+        rows.push(["relatedTarget", e.relatedTarget ? (e.relatedTarget.id || e.relatedTarget.tagName) : "null"]);
+      }
+      if (e.type === "wheel") {
+        rows.push(["deltaX, deltaY", e.deltaX.toFixed(1) + ", " + e.deltaY.toFixed(1)]);
+        rows.push(["direction", e.deltaY < 0 ? "up" : e.deltaY > 0 ? "down" : "sideways"]);
+      }
+
+      var html = "";
+      rows.forEach(function (r) { html += "<div>" + r[0] + "</div><div>" + r[1] + "</div>"; });
+      document.getElementById("details").innerHTML = html;
+    }
+
+    function addLogLine(e, x, y) {
+      var extra = "";
+      if (e.type === "wheel") extra = " deltaY=" + e.deltaY.toFixed(1);
+      else if (e.type.indexOf("move") < 0 && e.type.indexOf("over") < 0 &&
+               e.type.indexOf("out") < 0 && e.type.indexOf("enter") < 0 &&
+               e.type.indexOf("leave") < 0) {
+        extra = " button=" + (BUTTON_NAMES[e.button] || e.button);
+      }
+
+      var time = new Date().toLocaleTimeString();
+      var line = document.createElement("div");
+      line.innerHTML = time + " <span class='type'>" + e.type + "</span>" +
+                       " on #" + (e.target.id || "?") + " at (" + x + ", " + y + ")" + extra;
+      log.insertBefore(line, log.firstChild);   // newest on top
+
+      while (log.children.length > 100) log.removeChild(log.lastChild);   // keep the log short
+    }
+
+    document.getElementById("clearButton").addEventListener("click", function () {
+      EVENTS.forEach(function (ev) {
+        counts[ev[0]] = 0;
+        cards[ev[0]].querySelector(".count").textContent = "0";
+      });
+      log.innerHTML = "";
+      document.getElementById("details").innerHTML = "<div>type</div><div>-</div>";
+    });
+  </script>
+</body>
+</html>
